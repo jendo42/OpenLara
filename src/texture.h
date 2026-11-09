@@ -14,7 +14,7 @@ struct Texture : GAPI::Texture {
             Texture(Tile8 *tiles, int tilesCount) : GAPI::Texture(256, 256, 1, OPT_PROXY) {
                 this->tiles = tiles;
             }
-        #elif defined(_GAPI_GU)
+        #elif defined(_GAPI_GU) || defined(_GAPI_GS)
             Tile4 *tiles;
             CLUT  *cluts;
 		// TODO: PSP depth ??
@@ -32,6 +32,9 @@ struct Texture : GAPI::Texture {
                 #else
                     this->tiles = tiles;
                     this->cluts = cluts;
+                    #ifdef _GAPI_GS
+                        initTiles(tiles, tilesCount, cluts, clutsCount);
+                    #endif
                 #endif
             }
         #else
@@ -55,7 +58,7 @@ struct Texture : GAPI::Texture {
         void bindTile(uint16 tile, uint16 clut) {
         #if defined(_GAPI_SW)
             bindTileIndices(tiles + tile);
-        #elif defined(_GAPI_GU)
+        #elif defined(_GAPI_GU) || defined(_GAPI_GS)
             bindTileCLUT(tiles + tile, cluts + clut);
         #else
             tiles[tile]->bind(0);
@@ -75,8 +78,9 @@ struct Texture : GAPI::Texture {
 #endif
 
     Texture(int width, int height, int depth, TexFormat format, uint32 opt = 0, void *data = NULL) : GAPI::Texture(width, height, depth, opt) {
+        LOG("-> Texture(%dx%dx%d, format: %u, opt: %u, data: %p)\n", width, height, depth, format, opt, data);
         #ifdef SPLIT_BY_TILE
-            #if !defined(_GAPI_SW) && !defined(_GAPI_GU)
+            #if !defined(_GAPI_SW) && !defined(_GAPI_GU) && !defined(_GAPI_GS)
                 memset(this->tiles, 0, sizeof(tiles));
             #endif
         #endif
@@ -135,11 +139,15 @@ struct Texture : GAPI::Texture {
     }
 
     virtual ~Texture() {
-        #if !defined(_GAPI_SW) && !defined(_GAPI_GU)
+        #if !defined(_GAPI_SW) && !defined(_GAPI_GU) && !defined(_GAPI_GS)
             #ifdef SPLIT_BY_TILE
                 for (int i = 0; i < COUNT(tiles); i++)
                     delete tiles[i];
             #endif
+        #endif
+
+        #if defined(_GAPI_GS) && defined(SPLIT_BY_TILE)
+            releaseTiles();
         #endif
 
         if (this->opt & OPT_PROXY) {

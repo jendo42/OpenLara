@@ -735,7 +735,11 @@ struct Video {
             VIDEO_SECTOR_MAX  = 16,
             AUDIO_SECTOR_SIZE = (16 + 112) * 18, // XA ADPCM data block size
 
+        #ifdef _OS_PS2
+            MAX_CHUNKS        = 8,
+        #else
             MAX_CHUNKS        = 4,
+        #endif // _OS_PS2
         };
 
         struct SyncHeader {
@@ -1511,9 +1515,14 @@ struct Video {
         frameData = new Color32[decoder->width * decoder->height];
         memset(frameData, 0, decoder->width * decoder->height * sizeof(Color32));
 
+    #ifdef _GAPI_GS
+        // PS2: one full-color texture (VRAM), no cross-fade between consecutive video frames
+        frameTex[0] = frameTex[1] = new Texture(decoder->width, decoder->height, 1, FMT_RGBA, OPT_DYNAMIC, frameData);
+    #else
         for (int i = 0; i < 2; i++) {
             frameTex[i] = new Texture(decoder->width, decoder->height, 1, FMT_RGBA, OPT_DYNAMIC, frameData);
         }
+    #endif
 
         if (!TR::getVideoTrack(id, playAsync, this)) {
             sample = Sound::play(decoder);
@@ -1538,8 +1547,10 @@ struct Video {
             sample->stop();
         }
         delete decoder;
+        if (frameTex[1] != frameTex[0]) {
+            delete frameTex[1];
+        }
         delete frameTex[0];
-        delete frameTex[1];
         delete[] frameData;
     }
 

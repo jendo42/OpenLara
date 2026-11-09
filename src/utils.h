@@ -14,6 +14,8 @@
         #define debugBreak() raise(SIGTRAP);
     #elif defined(_OS_3DS)
         #define debugBreak() svcBreak(USERBREAK_ASSERT);
+    #elif defined(_OS_PS2)
+        #define debugBreak() __asm__ volatile ("break")
     #else
         #define debugBreak() _asm { int 3 }
     #endif
@@ -38,7 +40,6 @@
             OutputDebugStringA(str);
         }
     #endif
-
 #else
 
     #define ASSERT(expr)
@@ -66,6 +67,9 @@
     #define LOG(...) __android_log_print(ANDROID_LOG_INFO,"OpenLara",__VA_ARGS__)
 #endif
 
+#ifdef _OS_PS2
+    #include <dirent.h>
+#endif
 
 #ifdef _OS_PSP
     extern "C" {
@@ -2082,9 +2086,44 @@ public:
 
         sceIoClose(dd);
     }
-
     static void readFileList() {
         char path[255];
+        strcpy(path, contentDir);
+        readDirectory(path);
+    }
+#elif _OS_PS2
+    #define PATH_BUFFER_MAX 255
+    static void readDirectory(char* path) {
+        struct dirent *entry;
+        LOG("Scanning directory '%s'...\n", path);
+        DIR *dir = opendir(path);
+        if (!dir) {
+            return;
+        }
+        size_t len = strlen(path);
+        while ((entry = readdir(dir)) != NULL) {
+            struct stat stbuf;
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            if (len + strlen(entry->d_name) + 2 >= PATH_BUFFER_MAX) {
+                continue;
+            }
+            strcat(path, entry->d_name);
+            if (stat(path, &stbuf) == 0) {
+                if (S_ISDIR(stbuf.st_mode)) {
+                    strcat(path, "/");
+                    readDirectory(path);
+                } else {
+                    fileList.push(StrUtils::copy(path + strlen(contentDir)));
+                }
+            }
+            path[len] = 0;
+        }
+        closedir(dir);
+    }
+    static void readFileList() {
+        char path[PATH_BUFFER_MAX];
         strcpy(path, contentDir);
         readDirectory(path);
     }

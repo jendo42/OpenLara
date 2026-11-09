@@ -4,6 +4,10 @@
 #include "core.h"
 #include "format.h"
 
+#ifndef GS_ANIM_CROSSFADE
+    #define GS_ANIM_CROSSFADE 1     // PS2: crossfade texture animation frames (debug switch)
+#endif
+
 enum CommonTexType {
     CTEX_FLASH,
     CTEX_HEALTH,
@@ -101,9 +105,28 @@ struct MeshBuilder {
 // level
     struct Geometry {
         int       count;
-        MeshRange ranges[100];
+        int       capacity;
+        MeshRange *ranges;  // grows on demand: SPLIT_BY_CLUT easily needs more than 100 ranges per room
 
-        Geometry() : count(0) {}
+        // plain struct (rooms are swapped memberwise on flipMap): ranges are freed by ~MeshBuilder via release()
+        Geometry() : count(0), capacity(0), ranges(NULL) {}
+
+        void release() {
+            delete[] ranges;
+            ranges   = NULL;
+            count    = capacity = 0;
+        }
+
+        void reserve(int n) {
+            if (n <= capacity) return;
+            int c = capacity ? capacity * 2 : 16;
+            if (c < n) c = n;
+            MeshRange *r = new MeshRange[c];
+            for (int i = 0; i < count; i++) r[i] = ranges[i];
+            delete[] ranges;
+            ranges   = r;
+            capacity = c;
+        }
 
         void finish(int iCount) {
             MeshRange *range = count ? &ranges[count - 1] : NULL;
@@ -137,7 +160,7 @@ struct MeshBuilder {
                 range->iCount = iCount - range->iStart;
     
             if (!range || range->iCount) {
-                ASSERT(count < COUNT(ranges));
+                reserve(count + 1);
                 range = &ranges[count++];
             }
 
@@ -188,6 +211,22 @@ struct MeshBuilder {
     };
 
     MeshBuilder(TR::Level *level, Texture *atlas) : atlas(atlas), level(level) {
+    #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+        memset(barTex, 0, sizeof(barTex));
+        // animated textures: Level::shiftAnimTex moves objectTextures[seq[j + 1]] into objectTextures[seq[j]],
+        // so the next frame of slot seq[j] is currently in slot seq[j + 1]
+        animBlend = 0.0f;
+        animNext  = new int16[max(1, int(level->objectTexturesCount))];
+        for (int i = 0; i < level->objectTexturesCount; i++) animNext[i] = -1;
+        for (int a = 0; a < level->animTexturesCount; a++) {
+            const TR::AnimTexture &seq = level->animTextures[a];
+            for (int j = 0; j < seq.count; j++) {
+                if (seq.textures[j] < level->objectTexturesCount) {
+                    animNext[seq.textures[j]] = int16(seq.textures[(j + 1) % seq.count]);
+                }
+            }
+        }
+    #endif
         dynMesh = new Mesh(NULL, COUNT(dynIndices), NULL, COUNT(dynVertices), 1, true);
         dynRange.vStart = 0;
         dynRange.iStart = 0;
@@ -432,6 +471,9 @@ struct MeshBuilder {
 
             if (model.type == TR::Entity::SKY) {
                 ModelRange &m = models[i];
+                m.geometry[0].reserve(1);
+                m.geometry[1].reserve(1);
+                m.geometry[2].reserve(1);
                 m.geometry[0].ranges[0].iCount = iCount - models[i].geometry[0].ranges[0].iStart;
                 m.geometry[1].ranges[0].iCount = 0;
                 m.geometry[2].ranges[0].iCount = 0;
@@ -648,9 +690,21 @@ struct MeshBuilder {
     }
 
     ~MeshBuilder() {
-        for (int i = 0; i < level->roomsCount; i++)
+    #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+        delete[] animNext;
+        for (int i = 0; i < COUNT(barTex); i++) {
+            delete barTex[i];
+        }
+    #endif
+        for (int i = 0; i < level->roomsCount; i++) {
             for (int j = 0; j < COUNT(rooms[i].dynamic); j++)
                 delete[] rooms[i].dynamic[j].faces;
+            for (int j = 0; j < COUNT(rooms[i].geometry); j++)
+                rooms[i].geometry[j].release();
+        }
+        for (int i = 0; i < level->modelsCount; i++)
+            for (int j = 0; j < COUNT(models[i].geometry); j++)
+                models[i].geometry[j].release();
 
         delete[] rooms;
         delete[] models;
@@ -792,8 +846,10 @@ struct MeshBuilder {
         for (int i = 0; i < room.data.fCount; i++)
             room.data.faces[i].water = false;
 
+    #ifndef _GAPI_GS    // PS2 always takes the water surface faces out of the room geometry (drawn translucent separately)
         if (Core::settings.detail.water == Core::Settings::LOW)
             return;
+    #endif
 
         for (int i = 0; i < room.data.fCount; i++) {
             TR::Face &f = room.data.faces[i];
@@ -1099,6 +1155,11 @@ struct MeshBuilder {
                 vertices[vCount].normal = rotate(v.normal, dir);
                 vertices[vCount].color  = ubyte4( c.r, c.g, c.b, c.a );
                 vertices[vCount].light  = ubyte4( light.r, light.g, light.b, 255 );
+            #ifdef _GAPI_GS
+                if (f.colored) {    // GS uses light as the vertex color: apply the face color (shader: aColor)
+                    vertices[vCount].light = ubyte4( light.r * c.r / 255, light.g * c.g / 255, light.b * c.b / 255, 255 );
+                }
+            #endif
 
                 vCount++;
             }
@@ -1313,8 +1374,77 @@ struct MeshBuilder {
         vCount += 4;
     }
 
+    // SPLIT_BY_TILE has no generated common textures (whiteSprite is all zero = tile 0, uv 0),
+    // so bars/frames would sample a random texel of the last bound tile. Draw them with whiteTex.
+    void dynBindWhite() {
+    #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+        dynBindTex(Core::whiteTex, 0xFFFE);
+    #endif
+    }
+
+#if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+    void dynBindTex(Texture *tex, uint16 id) {
+        if (curTile != id) {
+            dynEnd();
+            dynBegin();
+            tex->bind(sDiffuse);
+            curTile = curClut = id; // next addDynSprite rebinds the atlas tile
+        }
+    }
+
+    // Common UI textures (normally generated into the atlas, see Level::fillCallback CommonTexData):
+    // flash / health / oxygen are 1x5 vertical gradients, option is a 5x5 patch with alpha falloff.
+    // Stored as 4x8 / 8x8 textures (GS uploads whole qwords), UVs map the bar onto the texel centers.
+    Texture *barTex[CTEX_OPTION + 1];
+
+    Texture* getBarTex(int type) {
+        static const uint32 gradients[3][5] = {
+            { 0x00000000, 0xFFA20058, 0xFFFFFFFF, 0xFFA20058, 0x00000000 }, // flash
+            { 0xFF2C5D71, 0xFF5E81AE, 0xFF2C5D71, 0xFF1B4557, 0xFF16304F }, // health
+            { 0xFF647464, 0xFFA47848, 0xFF647464, 0xFF4C504C, 0xFF303030 }, // oxygen
+        };
+        static const uint32 option[5] = { 0x20202020, 0x60606060, 0x80808080, 0x60606060, 0x20202020 };
+
+        if (!barTex[type]) {
+            uint32 data[8 * 8];
+            int w = (type == CTEX_OPTION) ? 8 : 4;
+            for (int y = 0; y < 8; y++) {
+                int r = min(y, 4);
+                for (int x = 0; x < w; x++) {
+                    if (type == CTEX_OPTION) {  // 5x5: transparent outer columns, rows fade in/out
+                        // the engine data is premultiplied (color == alpha) for bmPremult; the GS blends
+                        // with plain alpha, so use white + the same alpha (the color comes from the vertex)
+                        int c = min(x, 4);
+                        data[y * w + x] = (c == 0 || c == 4) ? 0x00FFFFFF : ((option[r] & 0xFF000000) | 0x00FFFFFF);
+                    } else {
+                        data[y * w + x] = gradients[type][r];
+                    }
+                }
+            }
+            for (int i = 0; i < w * 8; i++) {  // GS alpha scale: 0x80 = 1.0
+                uint32 a = data[i] >> 24;
+                data[i] = (data[i] & 0x00FFFFFF) | (((a + 1) >> 1) << 24);
+            }
+            barTex[type] = new Texture(w, 8, 1, FMT_RGBA, 0, data);
+            barTex[type]->alphaRGBA = true;
+        }
+        return barTex[type];
+    }
+#endif
+
     void addDynBar(const TR::TextureInfo &tile, const vec2 &pos, const vec2 &size, uint32 color, uint32 color2 = 0) {
         dynCheck(1 * 6);
+    #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+        int barType = int(&tile - CommonTex);
+        bool isBar = (barType >= CTEX_FLASH && barType <= CTEX_OPTION);
+        if (isBar) {
+            dynBindTex(getBarTex(barType), uint16(0xFFF0 + barType));
+        } else {
+            dynBindWhite();
+        }
+    #else
+        dynBindWhite();
+    #endif
 
         Index *indices   = dynIndices;
         Vertex *vertices = dynVertices;
@@ -1343,6 +1473,16 @@ struct MeshBuilder {
 
             short2 uv = tile.texCoordAtlas[i];
 
+        #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+            if (isBar) {    // texel centers of the 5 gradient rows (and 5 option columns)
+                float tw = (barType == CTEX_OPTION) ? 8.0f : 4.0f;
+                float u1 = (barType == CTEX_OPTION) ? 4.5f : 0.5f;    // option: across the 5 columns
+                float u = (i == 1 || i == 2) ? u1 : 0.5f;
+                float v = (i >= 2) ? 4.5f : 0.5f;
+                uv = short2(short(u / tw * 32767.0f), short(v / 8.0f * 32767.0f));
+            }
+        #endif
+
             v.texCoord = short4( uv.x, uv.y, 32767, 32767 );
         }
 
@@ -1351,6 +1491,7 @@ struct MeshBuilder {
 
     void addDynFrame(const vec2 &pos, const vec2 &size, uint32 color1, uint32 color2) {
         dynCheck(4 * 6);
+        dynBindWhite();
 
         Index *indices   = dynIndices;
         Vertex *vertices = dynVertices;
@@ -1431,6 +1572,48 @@ struct MeshBuilder {
 
         Dynamic &dyn = rooms[roomIndex].dynamic[transparent];
         if (dyn.count) {
+        #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+            // PS2: crossfade texture animations: current frame, then the next frame on top weighted by
+            // animBlend (additive faces: current * (1 - t) + next * t, both additive)
+            float t = GS_ANIM_CROSSFADE ? animBlend : 0.0f;
+            bool additive = (transparent == 2);
+            renderDynFaces(roomIndex, dyn, false, additive ? 1.0f - t : 1.0f);
+            if (t > 0.02f) {
+                bool alphaTest = (Core::renderState & RS_DISCARD) != 0;
+                if (!additive) {
+                    Core::setBlendMode(bmAlpha);
+                    Core::setDepthWrite(false);
+                    Core::setAlphaTest(false);  // the overlay alpha (t) is below the alpha test threshold
+                }
+                renderDynFaces(roomIndex, dyn, true, t);
+                if (!additive) {
+                    Core::setBlendMode(transparent == 1 ? bmPremult : bmNone);
+                    Core::setDepthWrite(true);
+                    Core::setAlphaTest(alphaTest);
+                }
+            }
+        #else
+            renderDynFaces(roomIndex, dyn, false, 1.0f);
+        #endif
+        }
+    }
+
+#if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+    int16 *animNext;    // objectTexture slot holding the next animation frame, -1 not animated
+    float  animBlend;   // 0..1 progress to the next animation frame (set by Level each frame)
+#endif
+
+    // dynamic (animated) room faces; next: draw the next animation frame (animated faces only) with the
+    // given weight (alpha, or color for additive faces); weight applies to animated faces only
+    void renderDynFaces(int roomIndex, const Dynamic &dyn, bool next, float weight) {
+            if (!dyn.faces) {   // should not happen (buildRoom allocates faces when count > 0)
+                static bool logged = false;
+                if (!logged) {
+                    LOG("! renderDynFaces: room %d transp %d count %d without faces\n", roomIndex, transparent, int(dyn.count));
+                    logged = true;
+                }
+                return;
+            }
         #ifdef SPLIT_BY_TILE
             uint16 tile = 0xFFFF, clut = 0xFFFF;
         #endif
@@ -1438,15 +1621,27 @@ struct MeshBuilder {
 
             const TR::Room::Data &d = level->rooms[roomIndex].data;
             for (int i = 0; i < dyn.count; i++) {
-                TR::Face        &f = d.faces[dyn.faces[i]];
-                TR::TextureInfo &t = level->objectTextures[f.flags.texture];
+                TR::Face &f = d.faces[dyn.faces[i]];
+                int texIndex = f.flags.texture;
+                bool animated = false;
+            #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+                animated = animNext[texIndex] >= 0;
+                if (next) {
+                    if (!animated) continue;
+                    texIndex = animNext[texIndex];
+                }
+            #endif
+                TR::TextureInfo &t = level->objectTextures[texIndex];
 
             #ifdef SPLIT_BY_TILE
                 if (iCount) {
+                    // flush on texture change, and before the dyn buffers overflow (a quad takes 4 vertices
+                    // and up to 12 indices, the buffers are sized for DYN_MESH_FACES * 3 vertices)
                     if (tile != t.tile
                     #ifdef SPLIT_BY_CLUT
                         || clut != t.clut
                     #endif
+                        || vCount + 4 > COUNT(dynVertices) || iCount + 12 > COUNT(dynIndices)
                         ) {
                         atlas->bindTile(tile, clut);
                         renderBuffer(dynIndices, iCount, dynVertices, vCount);
@@ -1461,7 +1656,21 @@ struct MeshBuilder {
                 }
             #endif
 
+                int vFirst = vCount;
                 ADD_ROOM_FACE(dynIndices, iCount, vCount, vStart, dynVertices, f, t);
+
+                if (animated && weight < 1.0f) {
+                    for (int k = vFirst; k < vCount; k++) {
+                        ubyte4 &l = dynVertices[k].light;
+                        if (transparent == 2) {     // additive: weight the color
+                            l.x = uint8(l.x * weight);
+                            l.y = uint8(l.y * weight);
+                            l.z = uint8(l.z * weight);
+                        } else {                    // blended over the current frame: weight the alpha
+                            l.w = uint8(l.w * weight);
+                        }
+                    }
+                }
             }
 
             if (iCount) {
@@ -1470,7 +1679,6 @@ struct MeshBuilder {
             #endif
                 renderBuffer(dynIndices, iCount, dynVertices, vCount);
             }
-        }
     }
 
     void dynBegin() {

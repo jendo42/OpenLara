@@ -91,8 +91,15 @@ struct OptionItem {
     }
 
     float drawBar(float x, float y, float w, bool active, uint8 value) const {
+        if (title != STR_EMPTY) {   // titled bar: caption on the left half, bar on the right half
+            UI::textOut(vec2(x + 32.0f, y), title);
+            x = x + w * 0.5f;
+            w = w * 0.5f;
+        }
         UI::renderBar(CTEX_WHITE_SPRITE, vec2(x + (32.0f + 2.0f), y - LINE_HEIGHT + 6 + 2), vec2(w - (64.0f + 4.0f), LINE_HEIGHT - 6 - 4), value / float(maxValue), color, 0xFF000000, 0xFFA0A0A0, 0xFFA0A0A0, 0xFF000000);
-        UI::specOut(vec2(x + 16.0f, y), icon);
+        if (icon) {
+            UI::specOut(vec2(x + 16.0f, y), icon);
+        }
         if (active) {
             if (value >        0) UI::specOut(vec2(x, y), 108);
             if (value < maxValue) UI::specOut(vec2(x + w - 12.0f, y), 109);
@@ -155,6 +162,9 @@ static const OptionItem optDetail[] = {
         3 /* without VR support */
     #endif
     ),
+#endif
+#ifdef _GAPI_GS
+    OptionItem( OptionItem::TYPE_PARAM,  STR_GAMMA,               SETTINGS( detail.gamma     ), 0xFFC0C0C0, 0, 10, true ),
 #endif
     OptionItem( ),
     OptionItem( OptionItem::TYPE_BUTTON, STR_APPLY ),
@@ -1825,7 +1835,11 @@ struct Inventory {
         mat4 mProj, mView;
         mView.identity();
         mProj = GAPI::ortho(-1, +1, -1, +1, 0, 1);
-        mProj.scale(vec3(1.0f / max(size.x, size.y)));
+        #ifdef FFP
+            mProj.scale(vec3(32767.0f / max(size.x, size.y)));   // mModel already applied 1/32767
+        #else
+            mProj.scale(vec3(1.0f / max(size.x, size.y)));
+        #endif
         mProj.translate(vec3(eye, 0.0f, 0.0f));
         Core::setViewProj(mView, mProj);
 
@@ -1979,8 +1993,10 @@ struct Inventory {
             background[0] = video->frameTex[0];
             renderTitleBG(1.0f, sy, 255, 1.0f, ch);
 
-            background[0] = video->frameTex[1];
-            renderTitleBG(1.0f, sy, clamp(int((video->stepTimer / video->step) * 255), 0, 255), 1.0f, ch);
+            if (video->frameTex[1] != video->frameTex[0]) { // cross-fade to the next frame (not with a single frame texture)
+                background[0] = video->frameTex[1];
+                renderTitleBG(1.0f, sy, clamp(int((video->stepTimer / video->step) * 255), 0, 255), 1.0f, ch);
+            }
 
             background[0] = tmp;
 

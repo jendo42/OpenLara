@@ -175,6 +175,19 @@
     #define INV_SINGLE_PLAYER
     #define INV_GAMEPAD_NO_TRIGGER
     #define INV_GAMEPAD_ONLY
+#elif _EE
+    #define _OS_PS2  1
+    #define _GAPI_GS 1
+
+    //#define TEX_SWIZZLE
+    //#define EDRAM_MESH
+    //#define EDRAM_TEX
+
+    #undef OS_PTHREAD_MT
+
+    #define INV_GAMEPAD_NO_TRIGGER
+    #define INV_GAMEPAD_ONLY
+    #define INV_VIBRATION
 #elif __vita__
     #define _OS_PSV   1
     #define _GAPI_GXM 1
@@ -218,7 +231,7 @@
     #undef OS_PTHREAD_MT
 #endif
 
-#if !defined(_OS_PSP) && !defined(_OS_TNS)
+#if !defined(_OS_PSP) && !defined(_OS_TNS) && !defined(_OS_PS2)
     #define USE_INFLATE
 #endif
 
@@ -226,13 +239,13 @@
     #include "libs/tinf/tinf.h"
 #endif
 
-#if defined(_GAPI_SW) || defined(_GAPI_GU)
+#if defined(_GAPI_SW) || defined(_GAPI_GU) || defined(_GAPI_GS)
     #define FFP
 #endif
 
 #ifdef FFP
     #define SPLIT_BY_TILE
-    #if defined(_GAPI_GU)
+    #if defined(_GAPI_GU) || defined(_GAPI_GS)
         #define SPLIT_BY_CLUT
     #endif
 #else
@@ -384,6 +397,7 @@ namespace Core {
             uint8 scale;
             uint8 vsync;
             uint8 stereo;
+            uint8 gamma;    // 0..10, 5 = neutral (tone mapping exposure, GS backend)
             void setFilter(Quality value) {
                 if (value > MEDIUM && !(support.maxAniso > 1))
                     value = MEDIUM;
@@ -803,6 +817,8 @@ namespace Core {
     #include "gapi/c3d.h"
 #elif _GAPI_GU
     #include "gapi/gu.h"
+#elif _GAPI_GS
+    #include "gapi/gs.h"
 #elif _GAPI_GXM
     #include "gapi/gxm.h"
 #elif _GAPI_VULKAN
@@ -960,6 +976,7 @@ namespace Core {
         settings.detail.vsync        = true;
         settings.detail.stereo       = Settings::STEREO_OFF;
         settings.detail.scale        = Settings::SCALE_100;
+        settings.detail.gamma        = 5;
         settings.audio.music         = SND_MAX_VOLUME;
         settings.audio.sound         = SND_MAX_VOLUME;
         settings.audio.reverb        = true;

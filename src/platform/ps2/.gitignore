@@ -1,0 +1,9 @@
+DELDATA
+DEMODATA
+FMV
+PSXDATA
+*.o
+*.elf
+*.irx
+savegame.dat
+settings

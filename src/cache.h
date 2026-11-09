@@ -195,6 +195,16 @@ struct ShaderCache {
     void bind(Core::Pass pass, Shader::Type type, int fx) {
         Core::pass = pass;
 
+    #ifdef _GAPI_GS
+        // FFP has no shader objects: tell the backend what is drawn so it can light it
+        GAPI::setLightingMode((pass == Core::passCompose) ?
+            ((type == Shader::ENTITY) ? GAPI::LIGHT_ENTITY :
+             (type == Shader::ROOM)   ? GAPI::LIGHT_ROOM   :
+             (type == Shader::SPRITE) ? GAPI::LIGHT_SPRITE :
+             (type == Shader::MIRROR) ? GAPI::LIGHT_MIRROR : GAPI::LIGHT_NONE) :
+            GAPI::LIGHT_NONE, (fx & FX_UNDERWATER) != 0);
+    #endif
+
         Shader *shader = getShader(pass, type, fx);
         if (shader) {
             shader->setup();

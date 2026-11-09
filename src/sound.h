@@ -1,6 +1,10 @@
 #ifndef H_SOUND
 #define H_SOUND
 
+#ifdef _OS_PS2
+    //#define NO_SOUND
+#endif
+
 #ifdef _OS_TNS
     #define NO_SOUND
 #endif
@@ -12,7 +16,7 @@
     #define DECODE_XA
     #define DECODE_OGG
 
-    #if !defined(_OS_PSP) && !defined(_OS_WEB) && !defined(_OS_PSV) && !defined(_OS_3DS) && !defined(_OS_XBOX) && !defined(_OS_XB1)
+    #if !defined(_OS_PSP) && !defined(_OS_WEB) && !defined(_OS_PSV) && !defined(_OS_3DS) && !defined(_OS_XBOX) && !defined(_OS_XB1) && !defined(_OS_PS2)
         #define DECODE_MP3
     #endif
 #endif
@@ -32,7 +36,7 @@
     #endif
 #endif
 
-#define SND_CHANNELS_MAX    128
+#define SND_CHANNELS_MAX    16
 #define SND_FADEOFF_DIST    (1024.0f * 8.0f)
 #define SND_LOWPASS_FREQ    0.2f
 #define SND_MAX_VOLUME      20
