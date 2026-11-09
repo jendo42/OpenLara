@@ -1335,6 +1335,7 @@ struct Level : IGame {
     uint8 *glyphsJA;
     uint8 *glyphsGR;
     uint8 *glyphsCN;
+    uint8 *glyphsKO;
 
     static int getAdvGlyphPage(int index) {
         index -= UI::advGlyphsStart;
@@ -1344,7 +1345,12 @@ struct Level : IGame {
                 index -= JA_GLYPH_COUNT;
                 if (index >= GR_GLYPH_COUNT) {
                     index -= GR_GLYPH_COUNT;
-                    return 4 + index / 256; // CN
+                    if (index >= CN_GLYPH_COUNT) {
+                        index -= CN_GLYPH_COUNT;
+                        return 8 + index / 256; // KO
+                    } else {
+                        return 4 + index / 256; // CN
+                    }
                 } else {
                     return 3; // GR
                 }
@@ -1427,6 +1433,8 @@ struct Level : IGame {
                             case 5  :
                             case 6  :
                             case 7  : glyphsData = (Color32*)owner->glyphsCN + (page - 4) * 256 * 256; break;
+                            case 8  :
+                            case 9  : glyphsData = (Color32*)owner->glyphsKO + (page - 8) * 256 * 256; break;
                             default : ASSERT(false);
                         }
 
@@ -1806,6 +1814,12 @@ struct Level : IGame {
             glyphsCN = Texture::LoadBMP(stream, glyphsW, glyphsH);
         }
 
+        {
+            uint32 glyphsW, glyphsH;
+            Stream stream(NULL, GLYPH_KO, size_GLYPH_KO);
+            glyphsKO = Texture::LoadBMP(stream, glyphsW, glyphsH);
+        }
+
     // repack texture tiles
         int maxTiles = level.objectTexturesCount + level.spriteTexturesCount + CTEX_MAX;
         Atlas *rAtlas = new Atlas(maxTiles, short4(4, 4, 4, 4), this, fillCallback);
@@ -1886,11 +1900,13 @@ struct Level : IGame {
         delete[] glyphsJA;
         delete[] glyphsGR;
         delete[] glyphsCN;
+        delete[] glyphsKO;
 
         glyphsRU = NULL;
         glyphsJA = NULL;
         glyphsGR = NULL;
         glyphsCN = NULL;
+        glyphsKO = NULL;
 
         atlasRooms->setFilterQuality(Core::settings.detail.filter);
         atlasObjects->setFilterQuality(Core::settings.detail.filter);
