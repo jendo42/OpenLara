@@ -22,6 +22,147 @@
 #include <vector>
 #include <unordered_set>
 
+// =================================================================================================
+// PS2 / GS configuration: every tunable of the GS backend (this file) and of the engine-side effects
+// (gapi/gs_fx.h) in one place. All of them can be overridden from the Makefile (-DGS_xxx=value).
+// =================================================================================================
+// ---- debug switches (1 = on) --------------------------------------------------------------------
+#ifndef GS_ANIM_CROSSFADE
+    #define GS_ANIM_CROSSFADE   1           // crossfade texture animation frames (rooms + water)
+#endif
+#ifndef GS_SHADOWS
+    #define GS_SHADOWS          1           // shadow map shadows under entities
+#endif
+#ifndef GS_WATER_WAVES
+    #define GS_WATER_WAVES      1           // wave fields + water surface layers
+#endif
+#ifndef GS_PROFILE
+    #define GS_PROFILE          1           // "PROF ms/frame" log line once per second
+#endif
+
+// ---- frame ----------------------------------------------------------------------------------------
+#ifndef GS_LATE_SWAP
+    #define GS_LATE_SWAP        1           // adaptive vsync: show a late frame immediately (may tear)
+#endif
+#ifndef GS_PACKET_RESERVE
+    #define GS_PACKET_RESERVE   8192        // qwords of the frame packet kept free for state changes + frame end
+#endif
+
+// ---- lighting / fog -------------------------------------------------------------------------------
+#ifndef GS_MIRROR_ENV
+    #define GS_MIRROR_ENV       0.5f        // save crystal: average environment reflection
+#endif
+#ifndef GS_FOG_LUT_SCALE
+    #define GS_FOG_LUT_SCALE    32.0f       // fog LUT index = dist * density * 32, covers exp(0 .. -8)
+#endif
+
+// ---- underwater -----------------------------------------------------------------------------------
+#ifndef GS_WATER_DEPTH_RANGE
+    #define GS_WATER_DEPTH_RANGE 3072.0f    // depth below the surface where the depth tint is full
+#endif
+#ifndef GS_RIPPLE_AMP
+    #define GS_RIPPLE_AMP       3.0f        // screen ripple: horizontal offset in pixels
+#endif
+#ifndef GS_RIPPLE_STRIP
+    #define GS_RIPPLE_STRIP     4           // screen ripple: strip height in pixels
+#endif
+
+// ---- water surface ----------------------------------------------------------------------------------
+#ifndef GS_WATER_FACE_ALPHA
+    #define GS_WATER_FACE_ALPHA 0.5f        // opacity of the original (PS1) water surface texture
+#endif
+#ifndef GS_WATER_SPECULAR
+    #define GS_WATER_SPECULAR   0.60f       // specular strength (masks the original water texture)
+#endif
+#ifndef GS_WATER_SPEC_MIN
+    #define GS_WATER_SPEC_MIN   0.2f        // original texture visibility without specular
+#endif
+#ifndef GS_WATER_ALPHA_MIN
+    #define GS_WATER_ALPHA_MIN  0.20f       // tint layer opacity looking straight down
+#endif
+#ifndef GS_WATER_FRESNEL
+    #define GS_WATER_FRESNEL    1.1f        // Fresnel strength (opacity + reflection color at grazing angles)
+#endif
+#ifndef GS_SPEC_GAIN
+    #define GS_SPEC_GAIN        4.0f        // wave specular gain (reflection added by the waves)
+#endif
+#ifndef GS_SPEC_CREST
+    #define GS_SPEC_CREST       0.35f       // extra highlight on wave crests
+#endif
+
+// ---- waves --------------------------------------------------------------------------------------------
+#ifndef GS_WAVE_CELL
+    #define GS_WAVE_CELL        256.0f      // world units per grid cell (4 cells per sector)
+#endif
+#ifndef GS_WAVE_HEIGHT
+    #define GS_WAVE_HEIGHT      7.0f        // world units per height unit
+#endif
+#ifndef GS_WAVE_MAX
+    #define GS_WAVE_MAX         11.0f       // height clamp in height units
+#endif
+#ifndef GS_WAVE_SPEED2
+    #define GS_WAVE_SPEED2      0.003f      // c^2 in cells^2 per step (~840 units/s at 60 Hz)
+#endif
+#ifndef GS_WAVE_DAMPING
+    #define GS_WAVE_DAMPING     0.997f      // per step
+#endif
+#ifndef GS_WAVE_DROP
+    #define GS_WAVE_DROP        20.0f       // Level::waterDrop strength -> height units
+#endif
+#ifndef GS_WAVE_SHADE
+    #define GS_WAVE_SHADE       3.0f        // slope exaggeration for normals (Fresnel, specular)
+#endif
+#ifndef GS_WAVE_UV
+    #define GS_WAVE_UV          0.08f       // ripple texture distortion by wave slope
+#endif
+#ifndef GS_WAVE_FIELDS
+    #define GS_WAVE_FIELDS      8           // max simulated pools at once
+#endif
+#ifndef GS_WAVE_STEP
+    #define GS_WAVE_STEP        (1.0f / 60.0f)  // simulation step (30 Hz looked choppy)
+#endif
+#ifndef GS_WAVE_CALM_RADIUS
+    #define GS_WAVE_CALM_RADIUS 1024.0f     // idle motion: random drop radius
+#endif
+#ifndef GS_WAVE_CALM_AMOUNT
+    #define GS_WAVE_CALM_AMOUNT 0.1f        // idle motion: random drop strength
+#endif
+
+// ---- shadows ------------------------------------------------------------------------------------------
+#ifndef GS_SHADOW_DARKNESS
+    #define GS_SHADOW_DARKNESS  0.5f        // opacity on the ground
+#endif
+#ifndef GS_SHADOW_FADE
+    #define GS_SHADOW_FADE      1024.0f     // height above the floor where the shadow has faded out
+#endif
+#ifndef GS_SHADOW_FROM_LIGHT
+    #define GS_SHADOW_FROM_LIGHT 0          // 0: top-down shadow, 1: cast away from the main room light
+#endif
+#ifndef GS_SHADOW_MIN_Y
+    #define GS_SHADOW_MIN_Y     0.6f        // GS_SHADOW_FROM_LIGHT: min vertical light component (max tilt ~53 deg)
+#endif
+#ifndef GS_SHADOW_LIFT
+    #define GS_SHADOW_LIFT      6.0f        // shadow quad above the floor (avoids fighting with it)
+#endif
+#ifndef GS_SHADOW_SOFT
+    #define GS_SHADOW_SOFT      2.0f        // soft edge: blur tap offset in shadow map texels (0 = hard)
+#endif
+#ifndef GS_SHADOW_MAP_SIZE
+    #define GS_SHADOW_MAP_SIZE  128         // shadow map target size (pixels)
+#endif
+
+// ---- fixed constants (hardware / memory layout, do not change) ------------------------------------
+#define GS_Z_MAX                16777215.0f                     // 24-bit Z buffer (PSMZ24); fog F uses the free top byte of XYZF2
+#define GS_PAGE_WORDS           2048                            // VRAM page (8 KB)
+#define GS_PAGES                (GRAPH_VRAM_MAX_WORDS / GS_PAGE_WORDS)
+#define GS_TILE_WORDS           (256 * 256 / 2 / 4)             // PSMT4 tile in normal VRAM: 32 KB
+#define GS_TILE_HL_WORDS        (32 * 2048)                     // 4HL/4HH tile: 32 pages of address space
+#define GS_TILE_SLOTS           24                              // tile slots in the spare bytes of fb0 + fb1 + Z
+#define GS_CAUSTIC_LUT_SCALE    (256.0f / PI)                   // caustic LUT: one |sin| period in 256 steps
+#define GS_WATER_TEX_SIZE       64                              // ripple texture
+#define GS_WATER_MAX_VERTS      4096                            // water / shadow quad vertex buffer
+#define GS_WATER_MAX_INDICES    (GS_WATER_MAX_VERTS * 6)
+
 #define PROFILE_MARKER(title)
 #define PROFILE_LABEL(id, name, label)
 #define PROFILE_TIMING(time)
@@ -45,8 +186,6 @@
 
 namespace GAPI {
 
-    #define GS_Z_MAX 16777215.0f    // 24-bit Z buffer (PSMZ24); fog F uses the free top byte of XYZF2
-
     struct Vertex {
         texel_t texCoord;
         color_t color;
@@ -69,12 +208,6 @@ namespace GAPI {
     u32 qwc_max;
 
     // ---- frame profile (EE COP0 Count, 294.912 MHz): printed once per second -----------------
-    #ifndef GS_PROFILE
-        #define GS_PROFILE 1
-    #endif
-    #ifndef GS_LATE_SWAP
-        #define GS_LATE_SWAP 1      // adaptive vsync: show a late frame immediately
-    #endif
     static inline u32 gsCycles() {
         u32 c;
         asm volatile ("mfc0 %0, $9" : "=r"(c));
@@ -118,7 +251,6 @@ namespace GAPI {
     VU_MATRIX proj;
 
     const u32 qtotal = 8192*16;
-    #define GS_PACKET_RESERVE 8192      // qwords kept free for state changes and the end of the frame
     qword_t packets1[qtotal] __attribute__((aligned(64)));
     qword_t packets2[qtotal] __attribute__((aligned(64)));
 
@@ -141,8 +273,6 @@ namespace GAPI {
     // GS memory = 512 pages of 8 KB (2048 words). Framebuffers + Z are allocated once by libgraph at
     // the bottom; everything above (textures, tiles fallback, CLUTs) uses this first-fit page allocator,
     // so blocks can be freed in any order (libgraph's allocator is a stack).
-    #define GS_PAGE_WORDS 2048
-    #define GS_PAGES      (GRAPH_VRAM_MAX_WORDS / GS_PAGE_WORDS)
 
     u16 vramPageOwner[GS_PAGES];    // per page: allocation size in pages at its first page, 0xFFFF inside, 0 free
     int vramHeapStart = GS_PAGES;   // first page managed here (set in init after the buffers)
@@ -451,9 +581,6 @@ namespace GAPI {
         // the GS never writes bits 24..31 of CT24/Z24 pixels. A 256x256 4HL/4HH tile uses the CT32
         // page layout (TBW 4) = 32 consecutive pages; a 640x448 buffer (140 pages) holds 4 tiles per
         // nibble -> 8 slots per buffer, 24 slots in fb0 + fb1 + Z. Extra tiles go to normal VRAM.
-        #define GS_TILE_WORDS     (256 * 256 / 2 / 4)  // PSMT4 tile in normal VRAM: 32 KB
-        #define GS_TILE_HL_WORDS  (32 * 2048)          // 4HL/4HH tile: 32 pages of address space
-        #define GS_TILE_SLOTS     24
 
         static u32 tileSlotBuffer(int b) {
             return (b < 2) ? fbs[b].address : zbuffer->address;
@@ -1040,7 +1167,6 @@ namespace GAPI {
 
     // MIRROR (save crystal): the shader uses vDiffuse = material.xyz (Crystal: 0.5, 0.5, 3.0) times a
     // reflected environment cube map; without the cube map use the material times an average reflection
-    #define GS_MIRROR_ENV 0.5f
 
     // Tone mapping (world geometry only): linear value v = (L / 128) * F, where L is the full vertex
     // color (PS1 scale, 128 = 1.0) and F the light factor. The GS vertex color is h = L / 2, so the
@@ -1072,7 +1198,6 @@ namespace GAPI {
     // Shadow map: while shadowMapMode is on, DIP renders into the small shadowTex target (light view,
     // orthographic) as untextured black with the shadow alpha, no blending, no Z. Overlapping parts write
     // the same value, so nothing is darkened twice. The level then draws one textured quad on the floor.
-    #define GS_SHADOW_MAP_SIZE 128
     bool     shadowMapMode = false;
     u32      shadowAlpha   = 0;
     Texture *shadowTex     = NULL;
@@ -1091,7 +1216,6 @@ namespace GAPI {
     // Underwater caustics like compose.glsl VERT_CAUSTICS:
     //   light *= 0.5 + |sin(dot(worldPos, 1/1024) + time)| * 0.75
     // |sin| has period PI, the LUT covers one period in 256 steps
-    #define GS_CAUSTIC_LUT_SCALE (256.0f / PI)
     float causticLUT[256];
     bool  causticLUTReady = false;
 
@@ -1102,7 +1226,6 @@ namespace GAPI {
     };
 
     // depth tint below the water surface + slightly cyan caustic bands, per channel factors
-    #define GS_WATER_DEPTH_RANGE 3072.0f
 
     inline void underwaterFactors(const CausticParams &cp, const VU_VECTOR &c, float cf, float &fr, float &fg, float &fb) {
         float wy = c.x * cp.yx + c.y * cp.yy + c.z * cp.yz + cp.y0;
@@ -1299,7 +1422,6 @@ namespace GAPI {
     // Fog: GS blends per vertex with F from XYZF2 (255 = no fog, 0 = fog color in FOGCOL).
     // Engine shaders use factor = exp(-dist * fogParams.w); we use the view depth (clip w) as dist
     // and a LUT instead of expf per vertex. F is packed into the top byte of the Z word (XYZF2 Z is 24 bit).
-    #define GS_FOG_LUT_SCALE 32.0f          // LUT index = dist * density * 32, covers exp(0 .. -8)
     u8    fogLUT[256];
     float fogLUTDensity = -1.0f;
 
@@ -1971,9 +2093,6 @@ namespace GAPI {
     // The engine draws water surfaces with WaterCache (shaders + float textures), not available here.
     // Level code builds the water geometry (wave grid, light rays) into waterVtx / waterIdx and draws
     // it through the normal DIP path (VU0 transform, clipping, fog) with drawWaterMesh.
-    #define GS_WATER_TEX_SIZE     64
-    #define GS_WATER_MAX_VERTS    4096
-    #define GS_WATER_MAX_INDICES  (GS_WATER_MAX_VERTS * 6)
 
     Texture      *waterTex  = NULL;     // repeating ripple pattern
     GAPI::Vertex *waterVtx  = NULL;     // 16-byte aligned (VU0)
@@ -2029,8 +2148,6 @@ namespace GAPI {
     // After the 3D pass the Z buffer is not needed until the next frame's clear, so the finished
     // frame is copied into the Z buffer memory as CT24 (CT24 writes keep the top byte = level tiles),
     // then drawn back in horizontal strips with sine offsets. Two full-screen sprite passes on the GS.
-    #define GS_RIPPLE_AMP      3.0f     // horizontal offset in pixels
-    #define GS_RIPPLE_STRIP    4        // strip height in pixels
 
 
     qword_t *rippleSetTexture(qword_t *q, u32 address, bool linear) {

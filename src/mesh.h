@@ -4,10 +4,6 @@
 #include "core.h"
 #include "format.h"
 
-#ifndef GS_ANIM_CROSSFADE
-    #define GS_ANIM_CROSSFADE 1     // PS2: crossfade texture animation frames (debug switch)
-#endif
-
 enum CommonTexType {
     CTEX_FLASH,
     CTEX_HEALTH,
@@ -18,6 +14,13 @@ enum CommonTexType {
     CTEX_WHITE_SPRITE,
     CTEX_MAX,
 };
+
+#if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
+    // PS2 helpers, defined in gapi/gs_fx.h (included from level.h)
+    inline Texture* gsBarTex(int type);
+    inline void     gsFreeBarTextures();
+    inline int16*   gsBuildAnimNext(TR::Level *level);
+#endif
 
 TR::TextureInfo CommonTex[CTEX_MAX];
 TR::TextureInfo &whiteRoom   = CommonTex[CTEX_WHITE_ROOM];
@@ -212,20 +215,8 @@ struct MeshBuilder {
 
     MeshBuilder(TR::Level *level, Texture *atlas) : atlas(atlas), level(level) {
     #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
-        memset(barTex, 0, sizeof(barTex));
-        // animated textures: Level::shiftAnimTex moves objectTextures[seq[j + 1]] into objectTextures[seq[j]],
-        // so the next frame of slot seq[j] is currently in slot seq[j + 1]
         animBlend = 0.0f;
-        animNext  = new int16[max(1, int(level->objectTexturesCount))];
-        for (int i = 0; i < level->objectTexturesCount; i++) animNext[i] = -1;
-        for (int a = 0; a < level->animTexturesCount; a++) {
-            const TR::AnimTexture &seq = level->animTextures[a];
-            for (int j = 0; j < seq.count; j++) {
-                if (seq.textures[j] < level->objectTexturesCount) {
-                    animNext[seq.textures[j]] = int16(seq.textures[(j + 1) % seq.count]);
-                }
-            }
-        }
+        animNext  = gsBuildAnimNext(level);
     #endif
         dynMesh = new Mesh(NULL, COUNT(dynIndices), NULL, COUNT(dynVertices), 1, true);
         dynRange.vStart = 0;
@@ -692,9 +683,7 @@ struct MeshBuilder {
     ~MeshBuilder() {
     #if defined(SPLIT_BY_TILE) && defined(_GAPI_GS)
         delete[] animNext;
-        for (int i = 0; i < COUNT(barTex); i++) {
-            delete barTex[i];
-        }
+        gsFreeBarTextures();
     #endif
         for (int i = 0; i < level->roomsCount; i++) {
             for (int j = 0; j < COUNT(rooms[i].dynamic); j++)
@@ -1392,44 +1381,6 @@ struct MeshBuilder {
         }
     }
 
-    // Common UI textures (normally generated into the atlas, see Level::fillCallback CommonTexData):
-    // flash / health / oxygen are 1x5 vertical gradients, option is a 5x5 patch with alpha falloff.
-    // Stored as 4x8 / 8x8 textures (GS uploads whole qwords), UVs map the bar onto the texel centers.
-    Texture *barTex[CTEX_OPTION + 1];
-
-    Texture* getBarTex(int type) {
-        static const uint32 gradients[3][5] = {
-            { 0x00000000, 0xFFA20058, 0xFFFFFFFF, 0xFFA20058, 0x00000000 }, // flash
-            { 0xFF2C5D71, 0xFF5E81AE, 0xFF2C5D71, 0xFF1B4557, 0xFF16304F }, // health
-            { 0xFF647464, 0xFFA47848, 0xFF647464, 0xFF4C504C, 0xFF303030 }, // oxygen
-        };
-        static const uint32 option[5] = { 0x20202020, 0x60606060, 0x80808080, 0x60606060, 0x20202020 };
-
-        if (!barTex[type]) {
-            uint32 data[8 * 8];
-            int w = (type == CTEX_OPTION) ? 8 : 4;
-            for (int y = 0; y < 8; y++) {
-                int r = min(y, 4);
-                for (int x = 0; x < w; x++) {
-                    if (type == CTEX_OPTION) {  // 5x5: transparent outer columns, rows fade in/out
-                        // the engine data is premultiplied (color == alpha) for bmPremult; the GS blends
-                        // with plain alpha, so use white + the same alpha (the color comes from the vertex)
-                        int c = min(x, 4);
-                        data[y * w + x] = (c == 0 || c == 4) ? 0x00FFFFFF : ((option[r] & 0xFF000000) | 0x00FFFFFF);
-                    } else {
-                        data[y * w + x] = gradients[type][r];
-                    }
-                }
-            }
-            for (int i = 0; i < w * 8; i++) {  // GS alpha scale: 0x80 = 1.0
-                uint32 a = data[i] >> 24;
-                data[i] = (data[i] & 0x00FFFFFF) | (((a + 1) >> 1) << 24);
-            }
-            barTex[type] = new Texture(w, 8, 1, FMT_RGBA, 0, data);
-            barTex[type]->alphaRGBA = true;
-        }
-        return barTex[type];
-    }
 #endif
 
     void addDynBar(const TR::TextureInfo &tile, const vec2 &pos, const vec2 &size, uint32 color, uint32 color2 = 0) {
@@ -1438,7 +1389,7 @@ struct MeshBuilder {
         int barType = int(&tile - CommonTex);
         bool isBar = (barType >= CTEX_FLASH && barType <= CTEX_OPTION);
         if (isBar) {
-            dynBindTex(getBarTex(barType), uint16(0xFFF0 + barType));
+            dynBindTex(gsBarTex(barType), uint16(0xFFF0 + barType));
         } else {
             dynBindWhite();
         }
